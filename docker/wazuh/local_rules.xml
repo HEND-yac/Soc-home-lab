@@ -1,0 +1,54 @@
+<!-- Local rules -->
+
+<!-- Modify it at your will. -->
+<!-- Copyright (C) 2015, Wazuh Inc. -->
+
+<!-- Example -->
+<group name="local,syslog,sshd,">
+
+  <!--
+  Dec 10 01:02:02 host sshd[1234]: Failed none for root from 1.1.1.1 port 1066 ssh2
+  -->
+  <rule id="100001" level="5">
+    <if_sid>5716</if_sid>
+    <srcip>1.1.1.1</srcip>
+    <description>sshd: authentication failed from IP 1.1.1.1.</description>
+    <group>authentication_failed,pci_dss_10.2.4,pci_dss_10.2.5,</group>
+  </rule>
+
+</group>
+
+<group name="misp,">
+  <rule id="100010" level="3">
+    <decoded_as>json</decoded_as>
+    <field name="integration">misp</field>
+    <description>MISP: Wazuh alert enriched with threat intel data</description>
+  </rule>
+
+  <rule id="100011" level="12">
+    <if_sid>100010</if_sid>
+    <field name="misp.matches">\.+</field>
+    <description>MISP: IOC match found for $(misp.ioc_value)</description>
+    <group>misp,</group>
+  </rule>
+</group>
+
+<group name="kerberos,windows,">
+  <rule id="100200" level="5">
+    <if_sid>60106</if_sid>
+    <field name="win.system.eventID">^4769$</field>
+    <description>Kerberos TGS ticket requested (4769) - Kerberoasting reconnaissance</description>
+    <mitre>
+      <id>T1558.003</id>
+    </mitre>
+  </rule>
+
+  <rule id="100201" level="12" frequency="10" timeframe="60">
+    <if_matched_sid>100200</if_matched_sid>
+    <same_field>win.system.computer</same_field>
+    <description>Kerberoasting detected: 10+ TGS requests in 60s</description>
+    <mitre>
+      <id>T1558.003</id>
+    </mitre>
+  </rule>
+</group>

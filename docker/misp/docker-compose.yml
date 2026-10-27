@@ -1,0 +1,63 @@
+ services:
+   misp-db:
+     image: mariadb:10.11
+     container_name: misp-db
+     restart: unless-stopped
+     environment:
+       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+       MYSQL_USER: ${MYSQL_USER}
+       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+       MYSQL_DATABASE: ${MYSQL_DATABASE}
+     volumes:
+       - misp-db-data:/var/lib/mysql
+     networks:
+       - soc_net
+
+   misp-modules:
+     image: coolacid/misp-docker:modules-latest
+     container_name: misp-modules
+     restart: unless-stopped
+     networks:
+       - soc_net
+
+   misp-core:
+     image: coolacid/misp-docker:core-latest
+     container_name: misp-core
+     restart: unless-stopped
+     depends_on:
+       - misp-db
+       - misp-modules
+     environment:
+       CRON_USER_ID: 1
+       MYSQL_HOST: misp-db
+       MYSQL_USER: ${MYSQL_USER}
+       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+       MYSQL_DATABASE: ${MYSQL_DATABASE}
+       BASE_URL: ${BASE_URL}
+       ADMIN_EMAIL: ${MISP_ADMIN_EMAIL}
+       ADMIN_PASSWORD: ${MISP_ADMIN_PASSPHRASE}
+       TIMEZONE: ${TIMEZONE}
+       REDIS_HOST: misp-redis
+       REDIS_FIND: misp-redis
+     ports:
+       - "8443:443"
+     volumes:
+       - misp-core-data:/var/www/MISP
+       - ./certs/cert.pem:/etc/nginx/certs/cert.pem
+       - ./certs/key.pem:/etc/nginx/certs/key.pem
+     networks:
+       - soc_net
+   misp-redis:
+     image: redis:7-alpine
+     container_name: misp-redis
+     restart: unless-stopped
+     networks:
+       - soc_net
+
+ volumes:
+   misp-db-data:
+   misp-core-data:
+
+ networks:
+   soc_net:
+     external: true

@@ -1,0 +1,21 @@
+ search {
+  index = cortex
+  uri = "http://thehive-elasticsearch:9200"
+  keepalive = 30s
+  pagesize = 50
+  nbshards = 5
+  nbreplicas = 1
+ }
+
+ play.http.secret.key = "home-lab-cortex-secret-key-2026-very-long-string"
+
+auth.method.basic = true
+
+analyzer {
+  urls = [
+    "/opt/Cortex-Analyzers/analyzers"
+  ]
+  fork-join-executor {
+    parallelism-factor = 2.0
+  }
+}
