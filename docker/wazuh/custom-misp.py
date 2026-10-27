@@ -7,8 +7,8 @@ from socket import socker, AF_UNIX, SOC_DGRAM
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-MISP_BASE_URL = "https://192.168.182.132:8443"
-MISP_API_KEY = "Wv5JXLz3642SzdRx0GAofp0vJtyKqtxOLlPwcFmh"
+MISP_BASE_URL = "https://<docker-host>:8443"
+MISP_API_KEY = "VOTRE_API_KEY"
 
 pwd = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 socket_addr = "{0}/queue/sockets/queue".format(pwd)

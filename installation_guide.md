@@ -1,6 +1,6 @@
 # Installation guide — SOC Home Lab
 
-Step-by-step commands to reproduce the lab. For the architecture, detection logic and scenarios, see the [README](../README.md).
+Step-by-step commands to reproduce the lab. For the architecture, detection logic and scenarios, see the [README](README.md).
 
 **Prerequisites:** Ubuntu 22.04 host, Docker Engine and Docker Compose v2, 16 GB RAM recommended.
 
@@ -12,7 +12,7 @@ Everything runs on one Ubuntu host with Docker Engine and Docker Compose v2. Rep
 ## 1. Wazuh (single-node)
 
 ```bash
-git clone https://github.com/wazuh/wazuh-docker.git -b v4.7.5
+git clone https://github.com/wazuh/wazuh-docker.git -b v4.12.0
 cd wazuh-docker/single-node
 docker compose -f generate-indexer-certs.yml run --rm generator   # self-signed certificates
 docker compose up -d
@@ -23,8 +23,8 @@ Dashboard: `https://<docker-host>` (default credentials are in the Wazuh documen
 Load the custom rules and the MISP integration from this repository:
 
 ```bash
-docker cp wazuh/local_rules.xml single-node_wazuh.manager_1:/var/ossec/etc/rules/local_rules.xml
-docker cp wazuh/custom-misp     single-node_wazuh.manager_1:/var/ossec/integrations/custom-misp
+docker cp docker/wazuh/local_rules.xml single-node_wazuh.manager_1:/var/ossec/etc/rules/local_rules.xml
+docker cp docker/wazuh/custom-misp.py single-node_wazuh.manager_1:/var/ossec/integrations/custom-misp
 docker exec single-node_wazuh.manager_1 bash -c \
   "chown root:wazuh /var/ossec/integrations/custom-misp && chmod 750 /var/ossec/integrations/custom-misp"
 ```
@@ -62,15 +62,24 @@ UI: `https://<docker-host>:8443`. Create an API key under *Administration → Li
 
 TheHive (with Cassandra and Elasticsearch) can be deployed from StrangeBee's official Docker templates (`github.com/StrangeBee/docker`). UI: `http://<docker-host>:9000`.
 
-Cortex, with its configuration bind-mounted from this repository:
+Create the shared network and attach TheHive and its Elasticsearch to it, so Cortex can reach them by name:
+
+```bash
+docker network create soc_net
+docker network connect soc_net thehive
+docker network connect soc_net thehive-elasticsearch
+```
+
+Cortex, on `soc_net`, with its configuration bind-mounted from this repository:
 
 ```bash
 docker run -d --name cortex -p 9001:9001 \
-  -v "$PWD/cortex/application.conf:/etc/cortex/application.conf" \
+  --network soc_net \
+  -v "$PWD/docker/cortex/application.conf:/etc/cortex/application.conf" \
   thehiveproject/cortex:3
 ```
 
-UI: `http://<docker-host>:9001`. Then: create an organization and enable **MISP_2_1** (see *Configuration notes* in the [README](../README.md#7-configuration-notes)), and link Cortex to TheHive with a Cortex API key (*TheHive → Platform Management → Connectors → Cortex*).
+UI: `http://<docker-host>:9001`. Then: create an organization and enable **MISP_2_1** (see *Configuration notes* in the [README](README.md#7-configuration-notes)), and link Cortex to TheHive with a Cortex API key (*TheHive → Platform Management → Connectors → Cortex*).
 
 ## 4. Tailscale (remote access)
 

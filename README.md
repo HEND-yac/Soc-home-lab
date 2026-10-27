@@ -57,10 +57,10 @@ An open-source **Security Operations Center** built on Docker during an 8-week C
 
 | Function | Tool | Deployment | Ports |
 |---|---|---|---|
-| SIEM / XDR | **Wazuh 4.x** | `wazuh-docker` **single-node** (manager, indexer, dashboard) | 1514 (agents), 1515 (enrollment), 55000 (API), 9200 (indexer), 443 (dashboard) |
+| SIEM / XDR | **Wazuh 4.12** | `wazuh-docker` **single-node** (manager, indexer, dashboard) | 1514 (agents), 1515 (enrollment), 55000 (API), 9200 (indexer), 443 (dashboard) |
 | Threat intelligence (CTI) | **MISP** | official `misp-docker` (core, nginx, MariaDB, modules, Redis, mail) | 8443 (HTTPS) |
 | Incident response | **TheHive 5** | `strangebee/thehive:5.2` + Cassandra + Elasticsearch | 9000 |
-| Automated analysis | **Cortex 3** | container, config bind-mounted from the host | 9001 |
+| Automated analysis | **Cortex 3** | single container started with `docker run` on `soc_net` (no compose), config bind-mounted from the host | 9001 |
 | Remote access | **Tailscale** | on the host, configured as a **subnet router** | WireGuard |
 | Linux endpoint | Ubuntu + Wazuh agent `001` | — | → 1514 |
 | Windows endpoint | Windows Server + **Active Directory** (AD DS, DNS, file services) + Wazuh agent | — | → 1514 |
@@ -74,11 +74,36 @@ An open-source **Security Operations Center** built on Docker during an 8-week C
 ## 3. How the components communicate
 
 ### 3.1 Docker networks
-Each stack was started from its own `docker-compose.yml`, so each lives in its own isolated bridge network (`single-node_default`, `misp-docker-official_default`, the TheHive network…). Containers resolve each other **by service name only inside the same network** (e.g. `wazuh.manager` → `wazuh.indexer:9200`, via Docker's embedded DNS).
+The stacks were deployed separately, each in its own bridge network, plus one shared network (`soc_net`) for the incident-response side:
 
-Cross-stack traffic therefore goes through the **host IP and published ports** (`ports: "9000:9000"`): the Wazuh integration script calls `192.168.182.129:9000`, not `thehive:9000`.
+| Network | Containers | Created by |
+|---|---|---|
+| `single-node_default` | wazuh.manager, wazuh.indexer, wazuh.dashboard | Wazuh `docker-compose.yml` |
+| `misp-docker-official_default` | misp-core, nginx, db, modules, redis, mail | MISP `docker-compose.yml` |
+| `prod1-thehive_thehive-network` | thehive, cassandra, thehive-elasticsearch | TheHive `docker-compose.yml` |
+| **`soc_net`** | **thehive, thehive-elasticsearch, cortex** | `docker network create soc_net`, containers attached with `--network` / `docker network connect` |
 
-> The original design planned a single shared network (`soc_net`). Stacks were deployed progressively and kept separate; communicating through published ports works equally well and mirrors a realistic multi-host architecture.
+**Cortex was not deployed with Docker Compose.** It was started manually with `docker run --network soc_net`, with its configuration bind-mounted from the host (`/home/hend/cortex-config/application.conf` → `/etc/cortex/application.conf`).
+
+Containers resolve each other **by name only inside a shared network**, through Docker's embedded DNS. Thanks to `soc_net`:
+- Cortex stores its data in TheHive's Elasticsearch at `http://thehive-elasticsearch:9200`;
+- TheHive and Cortex talk to each other directly by container name.
+
+Wazuh and MISP stay in their own networks, so traffic to and from them goes through the **host IP and published ports**: the Wazuh integration scripts call `http://192.168.182.129:9000` (TheHive) and `https://192.168.182.129:8443` (MISP), and Cortex reaches MISP the same way.
+
+```
+┌── single-node_default ──┐   host IP :8443   ┌── misp-docker-official_default ──┐
+│ wazuh.manager           │──────────────────►│ misp-core / nginx                 │
+│  ├─ custom-misp         │                   └───────────────▲──────────────────┘
+│  ├─ custom-misp-hash    │   host IP :9000                   │ host IP :8443
+│  └─ custom-thehive      │──────────┐                        │
+└─────────────────────────┘          ▼                        │
+                        ┌──────────────── soc_net ────────────┴───┐
+                        │ thehive ◄──► cortex ──► thehive-elasticsearch │
+                        └─────────────────────────────────────────┘
+```
+
+> The specification planned to put every component on `soc_net`. In the final setup it unifies TheHive, Cortex and Elasticsearch; Wazuh and MISP keep their own networks and are reached through published ports, which works just as well and mirrors a multi-host architecture.
 
 ### 3.2 Three communication mechanisms
 
@@ -174,7 +199,7 @@ A single Kerberos service-ticket request (4769) is normal. A burst of 10+ in 60 
 
 ```
 1. DETECTION     Agent sends events ──► wazuh.manager :1514 ──► wazuh-analysisd applies decoders + rules
-2. ENRICHMENT    wazuh-integratord runs custom-misp: extracts the source IP
+2. ENRICHMENT    wazuh-integratord runs custom-misp (IPs) and custom-misp-hash (file hashes)
                  ──► POST MISP /attributes/restSearch
                  ──► result written to the Unix socket ──► rule 100011 (level 12) on match
 3. NOTIFICATION  custom-thehive turns alerts above the configured level into a JSON payload
@@ -219,7 +244,7 @@ for i in {1..10}; do ssh baduser@<linux-endpoint> -o ConnectTimeout=2; done
 Detection rules **100200 / 100201** are in place (Event ID 4769, T1558.003). Simulation approach: create a service account with an SPN (`setspn -A HTTP/service1 <user>`), then request service tickets with Rubeus or Impacket `GetUserSPNs.py`.
 
 ### Scenario 3: Malicious file hash via MISP
-Planned approach: add a file hash as an IoC in MISP, monitor a directory with Wazuh **FIM (syscheck)**, and extend the MISP integration to look up hashes and raise a critical alert on a match.
+A second integration script, **`custom-misp-hash`**, is deployed on the manager and declared in `ossec.conf`. Approach: add a file hash as an IoC in MISP, monitor a directory with Wazuh **FIM (syscheck)**, and let the script look up the file hash in MISP to raise a critical alert on a match.
 
 ---
 
@@ -280,7 +305,7 @@ docker cp single-node_wazuh.manager_1:/var/ossec/etc/rules/local_rules.xml .
 
 **Limitations**
 - RAM limits running every component at full load simultaneously.
-- Docker networks not unified (`soc_net` planned, stacks kept separate).
+- Docker networks only partly unified: `soc_net` links TheHive, Cortex and Elasticsearch; Wazuh and MISP are reached through published ports.
 - `cert_check: false` and self-signed certificates: acceptable in a lab, not in production.
 
 **Next steps**
@@ -294,28 +319,36 @@ docker cp single-node_wazuh.manager_1:/var/ossec/etc/rules/local_rules.xml .
 
 ## 10. Installation
 
-Step-by-step deployment commands (Wazuh, MISP, TheHive, Cortex, Tailscale, agents and a pipeline test) are in **[docs/INSTALL.md](docs/INSTALL.md)**.
+Step-by-step deployment commands (Wazuh, MISP, TheHive, Cortex, Tailscale, agents and a pipeline test) are in **[installation_guide.md](installation_guide.md)**.
 
 ---
 
 ## 11. Repository structure
 
 ```
-soc-home-lab/
+Soc-home-lab/
 ├── README.md
+├── installation_guide.md          deployment commands
+├── .gitignore                     keeps .env, keys and certificates out of Git
 ├── docs/
-│   ├── INSTALL.md                deployment commands
-│   └── cahier-des-charges.md     project specification (8-week plan)
-├── .gitignore                    keeps .env, keys and certificates out of Git
-├── wazuh/
-│   ├── docker-compose.yml        from wazuh/wazuh-docker (single-node)
-│   ├── local_rules.xml           custom rules 100010/100011, 100200/100201
-│   └── custom-misp               MISP integration script (API key removed)
-└── cortex/
-    └── application.conf          secrets replaced by placeholders
+│   ├── ARCHITECTURE.png           architecture diagram
+│   └── CAHIER_DE_CHARGE.md        project specification (8-week plan)
+└── docker/
+    ├── wazuh/
+    │   ├── docker-compose.yml     from wazuh/wazuh-docker (single-node)
+    │   ├── local_rules.xml        custom rules 100010/100011, 100200/100201
+    │   └── custom-misp.py         MISP integration script (API key and host as placeholders)
+    ├── misp/
+    │   └── docker-compose.yml     secrets read from .env (not committed)
+    ├── thehive/
+    │   └── docker-compose.yml     TheHive 5.2 + Cassandra + Elasticsearch
+    └── cortex/
+        └── application.conf       Cortex config, secret key replaced by a placeholder
 ```
 
-Third-party components (Wazuh Docker, MISP Docker, Cortex-Analyzers) are used from their official repositories and are not redistributed here. **No secrets are committed**: API keys, passwords and certificates are excluded.
+Cortex has no compose file: it runs from a single `docker run` command (see [installation_guide.md](installation_guide.md)).
+
+Third-party components (Wazuh Docker, MISP Docker, Cortex-Analyzers) are used from their official repositories and are not redistributed here. **No secrets are committed**: API keys, passwords and certificates are excluded or replaced by placeholders. The Wazuh compose file keeps the project's public default credentials, which must be changed in any real deployment.
 
 ---
 

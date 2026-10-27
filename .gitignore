@@ -1,0 +1,16 @@
+# Secrets — never commit
+.env
+*.env
+secrets/
+*.key
+*.pem
+*.crt
+*.p12
+
+# Wazuh generated certificates
+config/wazuh_indexer_ssl_certs/
+
+# Local / OS files
+*.log
+.DS_Store
+Thumbs.db
